@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface SnakeGameProps {
   onScoreChange: (score: number) => void;
@@ -7,102 +7,137 @@ interface SnakeGameProps {
 
 const GRID_SIZE = 20;
 const GAME_SIZE = 400;
+const CELLS = GAME_SIZE / GRID_SIZE; // 20 cells
 
 const SnakeGame: React.FC<SnakeGameProps> = ({ onScoreChange, gameState }) => {
   const [snake, setSnake] = useState([{ x: 10, y: 10 }]);
   const [food, setFood] = useState({ x: 15, y: 15 });
-  const [direction, setDirection] = useState({ x: 0, y: 0 });
+  const [direction, setDirection] = useState({ x: 1, y: 0 });
   const [score, setScore] = useState(0);
   const [gameOver, setGameOver] = useState(false);
+  const [level, setLevel] = useState(1);
 
-  const generateFood = () => {
-    let newFood;
+  // Refs to avoid stale closures
+  const snakeRef = useRef(snake);
+  const foodRef = useRef(food);
+  const directionRef = useRef(direction);
+  const scoreRef = useRef(score);
+  const nextDirRef = useRef(direction); // Buffer for next direction input
+
+  snakeRef.current = snake;
+  foodRef.current = food;
+  directionRef.current = direction;
+  scoreRef.current = score;
+
+  const generateFood = useCallback((currentSnake: typeof snake) => {
+    let newFood: { x: number; y: number };
     do {
       newFood = {
-        x: Math.floor(Math.random() * (GAME_SIZE / GRID_SIZE)),
-        y: Math.floor(Math.random() * (GAME_SIZE / GRID_SIZE))
+        x: Math.floor(Math.random() * CELLS),
+        y: Math.floor(Math.random() * CELLS)
       };
-    } while (snake.some(segment => segment.x === newFood.x && segment.y === newFood.y));
-
+    } while (currentSnake.some(seg => seg.x === newFood.x && seg.y === newFood.y));
     return newFood;
-  };
+  }, []);
 
-  const resetGame = () => {
-    setSnake([{ x: 10, y: 10 }]);
-    setFood(generateFood());
-    setDirection({ x: 0, y: 0 });
+  const resetGame = useCallback(() => {
+    const newSnake = [{ x: 10, y: 10 }];
+    const newFood = generateFood(newSnake);
+    setSnake(newSnake);
+    setFood(newFood);
+    const initialDir = { x: 1, y: 0 };
+    setDirection(initialDir);
+    nextDirRef.current = initialDir;
     setScore(0);
     setGameOver(false);
-  };
+    setLevel(1);
+  }, [generateFood]);
 
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
-    if (gameState !== 'playing' || gameOver) return;
-    
+    if (gameState !== 'playing') return;
+    if (gameOver) {
+      if (event.key === ' ' || event.key === 'Enter') resetGame();
+      return;
+    }
+
+    // Buffer next direction — prevent 180° reversal
+    const cur = directionRef.current;
     switch (event.key) {
       case 'ArrowUp':
-        if (direction.y === 0) setDirection({ x: 0, y: -1 });
+        if (cur.y === 0) nextDirRef.current = { x: 0, y: -1 };
         break;
       case 'ArrowDown':
-        if (direction.y === 0) setDirection({ x: 0, y: 1 });
+        if (cur.y === 0) nextDirRef.current = { x: 0, y: 1 };
         break;
       case 'ArrowLeft':
-        if (direction.x === 0) setDirection({ x: -1, y: 0 });
+        if (cur.x === 0) nextDirRef.current = { x: -1, y: 0 };
         break;
       case 'ArrowRight':
-        if (direction.x === 0) setDirection({ x: 1, y: 0 });
+        if (cur.x === 0) nextDirRef.current = { x: 1, y: 0 };
         break;
     }
-  }, [gameState, direction, gameOver]);
+  }, [gameState, gameOver, resetGame]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleKeyPress]);
 
-  // Game loop
+  // Game loop — no snake/food/direction in deps
   useEffect(() => {
     if (gameState !== 'playing' || gameOver) return;
 
+    const speed = Math.max(80, 200 - (level - 1) * 20);
+
     const gameLoop = setInterval(() => {
-      if (direction.x === 0 && direction.y === 0) return;
-      
+      // Apply buffered direction
+      const newDir = nextDirRef.current;
+      setDirection(newDir);
+      directionRef.current = newDir;
+
       setSnake(prevSnake => {
-        const newSnake = [...prevSnake];
-        const head = { ...newSnake[0] };
-        
-        head.x += direction.x;
-        head.y += direction.y;
+        const head = {
+          x: prevSnake[0].x + newDir.x,
+          y: prevSnake[0].y + newDir.y
+        };
 
-        // Boundary wrapping (like Pac-Man)
-        if (head.x < 0) head.x = (GAME_SIZE / GRID_SIZE) - 1;
-        if (head.x >= GAME_SIZE / GRID_SIZE) head.x = 0;
-        if (head.y < 0) head.y = (GAME_SIZE / GRID_SIZE) - 1;
-        if (head.y >= GAME_SIZE / GRID_SIZE) head.y = 0;
-
-        // Check self collision
-        if (newSnake.some(segment => segment.x === head.x && segment.y === head.y)) {
+        // Wall collision
+        if (head.x < 0 || head.x >= CELLS || head.y < 0 || head.y >= CELLS) {
           setGameOver(true);
           return prevSnake;
         }
 
-        newSnake.unshift(head);
+        // Self collision
+        if (prevSnake.some(seg => seg.x === head.x && seg.y === head.y)) {
+          setGameOver(true);
+          return prevSnake;
+        }
 
-        // Check food collision
-        if (head.x === food.x && head.y === food.y) {
-          setFood(generateFood());
-          const newScore = score + 10;
+        const newSnake = [head, ...prevSnake];
+
+        // Check food
+        const currentFood = foodRef.current;
+        if (head.x === currentFood.x && head.y === currentFood.y) {
+          const newScore = scoreRef.current + 10;
+          scoreRef.current = newScore;
           setScore(newScore);
           onScoreChange(newScore);
+          const newLevel = Math.floor(newScore / 100) + 1;
+          setLevel(newLevel);
+          const newFood = generateFood(newSnake);
+          setFood(newFood);
+          foodRef.current = newFood;
+          // Don't pop — snake grows
         } else {
           newSnake.pop();
         }
 
         return newSnake;
       });
-    }, 150);
+    }, speed);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, direction, food, score, gameOver, snake, onScoreChange]);
+  }, [gameState, gameOver, level, onScoreChange, generateFood]); // ✅ No snake/food in deps
 
   return (
     <div className="snake-game" style={{ width: GAME_SIZE, height: GAME_SIZE }}>
@@ -131,17 +166,21 @@ const SnakeGame: React.FC<SnakeGameProps> = ({ onScoreChange, gameState }) => {
             height: GRID_SIZE - 1
           }}
         />
-        
+
+        {/* UI overlay */}
+        <div className="absolute top-1 left-2 text-green-400 text-xs">
+          SCORE: {score} | LVL: {level} | Length: {snake.length}
+        </div>
+        <div className="absolute bottom-1 left-2 text-green-400 text-xs">
+          Arrow Keys: Move
+        </div>
+
         {/* Game Over overlay */}
         {gameOver && (
-          <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center flex-col">
-            <div className="text-red-500 text-2xl font-bold mb-4">GAME OVER</div>
-            <button
-              onClick={resetGame}
-              className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-            >
-              Play Again
-            </button>
+          <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center flex-col">
+            <div className="text-red-500 text-2xl font-bold mb-3">GAME OVER</div>
+            <div className="text-white text-lg mb-2">Score: {score}</div>
+            <div className="text-green-400 text-sm animate-pulse">SPACE / ENTER to restart</div>
           </div>
         )}
       </div>

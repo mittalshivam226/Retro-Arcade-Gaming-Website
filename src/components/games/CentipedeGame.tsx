@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface CentipedeGameProps {
   onScoreChange: (score: number) => void;
@@ -8,33 +8,59 @@ interface CentipedeGameProps {
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 500;
 
+interface CentipedeSegment {
+  x: number;
+  y: number;
+  direction: number;
+}
+
+interface Mushroom {
+  x: number;
+  y: number;
+  hits: number;
+}
+
+interface Bullet {
+  x: number;
+  y: number;
+  id: number;
+}
+
 const CentipedeGame: React.FC<CentipedeGameProps> = ({ onScoreChange, gameState }) => {
   const [playerPos, setPlayerPos] = useState({ x: 200, y: 450 });
-  const [bullets, setBullets] = useState<Array<{ x: number; y: number; id: number }>>([]);
-  const [centipede, setCentipede] = useState<Array<{ x: number; y: number; direction: number }>>([]);
-  const [mushrooms, setMushrooms] = useState<Array<{ x: number; y: number; hits: number }>>([]);
+  const [bullets, setBullets] = useState<Bullet[]>([]);
+  const [centipede, setCentipede] = useState<CentipedeSegment[]>([]);
+  const [mushrooms, setMushrooms] = useState<Mushroom[]>([]);
   const [score, setScore] = useState(0);
   const [bulletId, setBulletId] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+
+  // Refs to avoid stale closures
+  const scoreRef = useRef(score);
+  const mushroomsRef = useRef(mushrooms);
+  const centipedeRef = useRef(centipede);
+  const playerPosRef = useRef(playerPos);
+  const bulletIdRef = useRef(bulletId);
+
+  scoreRef.current = score;
+  mushroomsRef.current = mushrooms;
+  centipedeRef.current = centipede;
+  playerPosRef.current = playerPos;
+  bulletIdRef.current = bulletId;
 
   // Initialize game objects
   useEffect(() => {
-    // Create centipede
-    const initialCentipede = [];
-    for (let i = 0; i < 10; i++) {
-      initialCentipede.push({
-        x: i * 20,
-        y: 50,
-        direction: 1
-      });
+    const initialCentipede: CentipedeSegment[] = [];
+    for (let i = 0; i < 12; i++) {
+      initialCentipede.push({ x: i * 30, y: 30, direction: 1 });
     }
     setCentipede(initialCentipede);
 
-    // Create mushrooms
-    const initialMushrooms = [];
-    for (let i = 0; i < 30; i++) {
+    const initialMushrooms: Mushroom[] = [];
+    for (let i = 0; i < 25; i++) {
       initialMushrooms.push({
-        x: Math.floor(Math.random() * (GAME_WIDTH - 20)),
-        y: Math.floor(Math.random() * 300) + 100,
+        x: Math.floor(Math.random() * ((GAME_WIDTH - 20) / 20)) * 20,
+        y: Math.floor(Math.random() * (280 / 20)) * 20 + 80,
         hits: 0
       });
     }
@@ -42,8 +68,8 @@ const CentipedeGame: React.FC<CentipedeGameProps> = ({ onScoreChange, gameState 
   }, []);
 
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
-    if (gameState !== 'playing') return;
-    
+    if (gameState !== 'playing' || gameOver) return;
+
     switch (event.key) {
       case 'ArrowLeft':
         setPlayerPos(prev => ({ ...prev, x: Math.max(0, prev.x - 5) }));
@@ -57,12 +83,14 @@ const CentipedeGame: React.FC<CentipedeGameProps> = ({ onScoreChange, gameState 
       case 'ArrowDown':
         setPlayerPos(prev => ({ ...prev, y: Math.min(GAME_HEIGHT - 20, prev.y + 5) }));
         break;
-      case ' ':
-        setBullets(prev => [...prev, { x: playerPos.x + 10, y: playerPos.y, id: bulletId }]);
+      case ' ': {
+        const newId = bulletIdRef.current;
+        setBullets(prev => [...prev, { x: playerPosRef.current.x + 10, y: playerPosRef.current.y, id: newId }]);
         setBulletId(prev => prev + 1);
         break;
+      }
     }
-  }, [gameState, playerPos, bulletId]);
+  }, [gameState, gameOver]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
@@ -71,120 +99,142 @@ const CentipedeGame: React.FC<CentipedeGameProps> = ({ onScoreChange, gameState 
 
   // Game loop
   useEffect(() => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || gameOver) return;
 
     const gameLoop = setInterval(() => {
-      // Move bullets
-      setBullets(prev => 
-        prev.map(bullet => ({ ...bullet, y: bullet.y - 8 }))
-            .filter(bullet => bullet.y > 0)
+      // Move bullets upward
+      setBullets(prev =>
+        prev
+          .map(bullet => ({ ...bullet, y: bullet.y - 8 }))
+          .filter(bullet => bullet.y > 0)
       );
 
-      // Move centipede
-      setCentipede(prev => 
-        prev.map((segment) => {
+      // Move centipede — use functional update to get fresh state
+      setCentipede(prevCentipede => {
+        const currentMushrooms = mushroomsRef.current;
+
+        return prevCentipede.map(segment => {
+          // Head moves, body follows — each segment follows the one before it
+          // For simplicity: each segment moves individually but reverses direction at walls/mushrooms
           const newX = segment.x + segment.direction * 2;
           let newY = segment.y;
           let newDirection = segment.direction;
 
-          // Check boundaries and mushroom collisions
-          if (newX <= 0 || newX >= GAME_WIDTH - 20) {
-            newDirection = -newDirection;
-            newY += 20;
-          }
+          // Check wall boundaries
+          const hitWall = newX <= 0 || newX >= GAME_WIDTH - 20;
 
           // Check mushroom collision
-          const hitMushroom = mushrooms.find(mushroom =>
-            Math.abs(newX - mushroom.x) < 20 &&
-            Math.abs(newY - mushroom.y) < 20
+          const hitMushroom = currentMushrooms.some(
+            mushroom => Math.abs(newX - mushroom.x) < 18 && Math.abs(segment.y - mushroom.y) < 18
           );
 
-          if (hitMushroom) {
-            newDirection = -newDirection;
-            newY += 20;
+          if (hitWall || hitMushroom) {
+            newDirection = -segment.direction;
+            newY = segment.y + 20;
           }
 
-          return {
-            x: newX,
-            y: newY,
-            direction: newDirection
-          };
-        })
-      );
+          // Check if centipede reached player zone — game over
+          if (newY >= GAME_HEIGHT - 60) {
+            setGameOver(true);
+          }
 
-      // Check bullet collisions with centipede
-      setBullets(prevBullets => {
-        const remainingBullets = [...prevBullets];
-        
-        setCentipede(prevCentipede => {
-          const newCentipede = [...prevCentipede];
-          
-          prevCentipede.forEach((segment, index) => {
-            const hitBullet = remainingBullets.find(bullet => 
-              Math.abs(bullet.x - segment.x) < 15 && 
-              Math.abs(bullet.y - segment.y) < 15
-            );
-            
-            if (hitBullet) {
-              const bulletIndex = remainingBullets.indexOf(hitBullet);
-              remainingBullets.splice(bulletIndex, 1);
-              
-              // Remove segment and add mushroom
-              newCentipede.splice(index, 1);
-              setMushrooms(prev => [...prev, { x: segment.x, y: segment.y, hits: 0 }]);
-              
-              const newScore = score + 10;
-              setScore(newScore);
-              onScoreChange(newScore);
-            }
-          });
-          
-          return newCentipede;
+          return { x: hitWall || hitMushroom ? segment.x : newX, y: newY, direction: newDirection };
         });
-        
-        return remainingBullets;
       });
 
-      // Check bullet collisions with mushrooms
+      // Bullet-centipede collision
       setBullets(prevBullets => {
-        const remainingBullets = [...prevBullets];
-        
-        setMushrooms(prevMushrooms => 
-          prevMushrooms.map(mushroom => {
-            const hitBullet = remainingBullets.find(bullet => 
-              Math.abs(bullet.x - mushroom.x) < 15 && 
-              Math.abs(bullet.y - mushroom.y) < 15
-            );
-            
-            if (hitBullet) {
-              const bulletIndex = remainingBullets.indexOf(hitBullet);
-              remainingBullets.splice(bulletIndex, 1);
-              
-              const newScore = score + 1;
-              setScore(newScore);
-              onScoreChange(newScore);
-              
-              return { ...mushroom, hits: mushroom.hits + 1 };
+        const toRemove = new Set<number>();
+        const defeatedPositions: { x: number; y: number }[] = [];
+
+        setCentipede(prevCentipede => {
+          // Collect hits first
+          const hitIndexes = new Set<number>();
+
+          prevBullets.forEach(bullet => {
+            prevCentipede.forEach((segment, segIdx) => {
+              if (
+                !hitIndexes.has(segIdx) &&
+                !toRemove.has(bullet.id) &&
+                Math.abs(bullet.x - segment.x) < 15 &&
+                Math.abs(bullet.y - segment.y) < 15
+              ) {
+                hitIndexes.add(segIdx);
+                toRemove.add(bullet.id);
+                defeatedPositions.push({ x: segment.x, y: segment.y });
+              }
+            });
+          });
+
+          if (hitIndexes.size > 0) {
+            const points = hitIndexes.size * 10;
+            const newScore = scoreRef.current + points;
+            scoreRef.current = newScore;
+            setScore(newScore);
+            onScoreChange(newScore);
+
+            // Convert killed segments to mushrooms
+            if (defeatedPositions.length > 0) {
+              setMushrooms(prev => [
+                ...prev,
+                ...defeatedPositions.map(pos => ({ ...pos, hits: 0 }))
+              ]);
             }
-            
-            return mushroom;
-          }).filter(mushroom => mushroom.hits < 4)
-        );
-        
-        return remainingBullets;
+
+            // Remove hit segments (filter by index)
+            return prevCentipede.filter((_, idx) => !hitIndexes.has(idx));
+          }
+
+          return prevCentipede;
+        });
+
+        // Remove bullets that hit
+        return prevBullets.filter(b => !toRemove.has(b.id));
+      });
+
+      // Bullet-mushroom collision — separate pass
+      setBullets(prevBullets => {
+        const toRemoveMushroomBullets = new Set<number>();
+
+        setMushrooms(prevMushrooms => {
+          return prevMushrooms
+            .map(mushroom => {
+              const hitBullet = prevBullets.find(
+                b =>
+                  !toRemoveMushroomBullets.has(b.id) &&
+                  Math.abs(b.x - mushroom.x) < 15 &&
+                  Math.abs(b.y - mushroom.y) < 15
+              );
+              if (hitBullet) {
+                toRemoveMushroomBullets.add(hitBullet.id);
+                const newScore = scoreRef.current + 1;
+                scoreRef.current = newScore;
+                setScore(newScore);
+                onScoreChange(newScore);
+                return { ...mushroom, hits: mushroom.hits + 1 };
+              }
+              return mushroom;
+            })
+            .filter(m => m.hits < 4);
+        });
+
+        return prevBullets.filter(b => !toRemoveMushroomBullets.has(b.id));
       });
     }, 100);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, playerPos, mushrooms, score, onScoreChange]);
+  }, [gameState, gameOver, onScoreChange]); // ✅ No mushrooms/centipede/score in deps
 
   return (
     <div className="relative bg-black" style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}>
+      {/* Player area boundary */}
+      <div
+        className="absolute left-0 right-0 h-px bg-green-500 opacity-50"
+        style={{ top: 300 }}
+      />
+
       {/* Player */}
-      <div 
-        className="absolute text-xl"
-        style={{ left: playerPos.x, top: playerPos.y }}
-      >
+      <div className="absolute text-xl" style={{ left: playerPos.x, top: playerPos.y }}>
         🔫
       </div>
 
@@ -213,14 +263,29 @@ const CentipedeGame: React.FC<CentipedeGameProps> = ({ onScoreChange, gameState 
         <div
           key={index}
           className="absolute text-sm"
-          style={{ left: mushroom.x, top: mushroom.y }}
+          style={{ left: mushroom.x, top: mushroom.y, opacity: 1 - mushroom.hits * 0.2 }}
         >
           🍄
         </div>
       ))}
 
-      {/* Player area boundary */}
-      <div className="absolute bottom-0 left-0 right-0 h-1 bg-green-500" style={{ top: 300 }}></div>
+      {/* Score */}
+      <div className="absolute top-2 left-2 text-green-400 text-xs">
+        SCORE: {score} | Segments: {centipede.length}
+      </div>
+
+      {/* Controls */}
+      <div className="absolute bottom-2 left-2 text-green-400 text-xs">
+        Arrows: Move | SPACE: Shoot
+      </div>
+
+      {/* Game Over */}
+      {gameOver && (
+        <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center flex-col">
+          <div className="text-red-500 text-2xl font-bold mb-3">GAME OVER</div>
+          <div className="text-white text-lg">Final Score: {score}</div>
+        </div>
+      )}
     </div>
   );
 };

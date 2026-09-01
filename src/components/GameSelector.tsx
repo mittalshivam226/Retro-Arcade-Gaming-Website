@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { ChevronUp, ChevronDown, Play } from 'lucide-react';
 import { Game } from '../types/game';
 
@@ -19,32 +19,32 @@ const GameSelector: React.FC<GameSelectorProps> = ({ games, onSelectGame, credit
     (currentPage + 1) * gamesPerPage
   );
 
-  const handleUp = () => {
+  const handleUp = useCallback(() => {
     setSelectedIndex(prev => prev > 0 ? prev - 1 : currentGames.length - 1);
-  };
+  }, [currentGames.length]);
 
-  const handleDown = () => {
+  const handleDown = useCallback(() => {
     setSelectedIndex(prev => prev < currentGames.length - 1 ? prev + 1 : 0);
-  };
+  }, [currentGames.length]);
 
-  const handlePageUp = () => {
+  const handlePageUp = useCallback(() => {
     setCurrentPage(prev => prev > 0 ? prev - 1 : totalPages - 1);
     setSelectedIndex(0);
-  };
+  }, [totalPages]);
 
-  const handlePageDown = () => {
+  const handlePageDown = useCallback(() => {
     setCurrentPage(prev => prev < totalPages - 1 ? prev + 1 : 0);
     setSelectedIndex(0);
-  };
+  }, [totalPages]);
 
-  const handleGameSelect = () => {
+  const handleGameSelect = useCallback(() => {
     const selectedGame = currentGames[selectedIndex];
     if (selectedGame && credits > 0) {
       onSelectGame(selectedGame.id);
     }
-  };
+  }, [currentGames, selectedIndex, credits, onSelectGame]);
 
-  const handleKeyPress = (event: KeyboardEvent) => {
+  const handleKeyPress = useCallback((event: KeyboardEvent) => {
     switch (event.key) {
       case 'ArrowUp':
         event.preventDefault();
@@ -68,12 +68,12 @@ const GameSelector: React.FC<GameSelectorProps> = ({ games, onSelectGame, credit
         handleGameSelect();
         break;
     }
-  };
+  }, [handleUp, handleDown, handlePageUp, handlePageDown, handleGameSelect]);
 
   React.useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [selectedIndex, currentPage, credits, currentGames]);
+  }, [handleKeyPress]);
 
   const selectedGame = currentGames[selectedIndex];
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface DefenderGameProps {
   onScoreChange: (score: number) => void;
@@ -8,62 +8,108 @@ interface DefenderGameProps {
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 300;
 
+interface Enemy {
+  x: number;
+  y: number;
+  type: 'lander' | 'bomber' | 'mutant';
+  id: number;
+  vy: number;
+  abducting: boolean;
+}
+
+interface Bullet {
+  x: number;
+  y: number;
+  id: number;
+}
+
+interface Humanoid {
+  x: number;
+  y: number;
+  beingAbducted: boolean;
+}
+
 const DefenderGame: React.FC<DefenderGameProps> = ({ onScoreChange, gameState }) => {
   const [playerPos, setPlayerPos] = useState({ x: 50, y: 150 });
-  const [bullets, setBullets] = useState<Array<{ x: number; y: number; id: number }>>([]);
-  const [enemies, setEnemies] = useState<Array<{ x: number; y: number; type: string; id: number }>>([]);
-  const [humanoids, setHumanoids] = useState<Array<{ x: number; y: number; saved: boolean }>>([]);
+  const [bullets, setBullets] = useState<Bullet[]>([]);
+  const [enemies, setEnemies] = useState<Enemy[]>([]);
+  const [humanoids, setHumanoids] = useState<Humanoid[]>([]);
   const [score, setScore] = useState(0);
-  const [bulletId, setBulletId] = useState(0);
+  const [lives, setLives] = useState(3);
+  const [gameOver, setGameOver] = useState(false);
+  const [wave, setWave] = useState(1);
 
-  // Initialize game objects
-  useEffect(() => {
-    const initialEnemies = [];
-    const initialHumanoids = [];
-    
-    for (let i = 0; i < 5; i++) {
-      initialEnemies.push({
+  const scoreRef = useRef(score);
+  const playerRef = useRef(playerPos);
+  const bulletIdRef = useRef(0);
+  const enemyIdRef = useRef(0);
+  const livesRef = useRef(lives);
+  const waveRef = useRef(wave);
+
+  scoreRef.current = score;
+  playerRef.current = playerPos;
+  livesRef.current = lives;
+  waveRef.current = wave;
+
+  const spawnWave = useCallback((waveNum: number) => {
+    const count = 3 + waveNum * 2;
+    const newEnemies: Enemy[] = [];
+    for (let i = 0; i < count; i++) {
+      const types: Enemy['type'][] = ['lander', 'bomber', waveNum > 2 ? 'mutant' : 'lander'];
+      newEnemies.push({
         x: Math.random() * GAME_WIDTH,
-        y: Math.random() * 100 + 50,
-        type: 'lander',
-        id: i
+        y: Math.random() * 100 + 30,
+        type: types[Math.floor(Math.random() * types.length)],
+        id: enemyIdRef.current++,
+        vy: 0,
+        abducting: false
       });
     }
-    
-    for (let i = 0; i < 8; i++) {
-      initialHumanoids.push({
-        x: i * 50 + 25,
+    setEnemies(newEnemies);
+
+    const newHumanoids: Humanoid[] = [];
+    for (let i = 0; i < 6; i++) {
+      newHumanoids.push({
+        x: i * 60 + 20,
         y: GAME_HEIGHT - 30,
-        saved: false
+        beingAbducted: false
       });
     }
-    
-    setEnemies(initialEnemies);
-    setHumanoids(initialHumanoids);
+    setHumanoids(newHumanoids);
   }, []);
 
+  // Initialize
+  useEffect(() => {
+    spawnWave(1);
+  }, [spawnWave]);
+
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
-    if (gameState !== 'playing') return;
-    
+    if (gameState !== 'playing' || gameOver) return;
+
     switch (event.key) {
       case 'ArrowLeft':
-        setPlayerPos(prev => ({ ...prev, x: Math.max(0, prev.x - 5) }));
+        setPlayerPos(prev => ({ ...prev, x: Math.max(0, prev.x - 6) }));
         break;
       case 'ArrowRight':
-        setPlayerPos(prev => ({ ...prev, x: Math.min(GAME_WIDTH - 30, prev.x + 5) }));
+        setPlayerPos(prev => ({ ...prev, x: Math.min(GAME_WIDTH - 30, prev.x + 6) }));
         break;
       case 'ArrowUp':
-        setPlayerPos(prev => ({ ...prev, y: Math.max(0, prev.y - 5) }));
+        setPlayerPos(prev => ({ ...prev, y: Math.max(0, prev.y - 6) }));
         break;
       case 'ArrowDown':
-        setPlayerPos(prev => ({ ...prev, y: Math.min(GAME_HEIGHT - 30, prev.y + 5) }));
+        setPlayerPos(prev => ({ ...prev, y: Math.min(GAME_HEIGHT - 30, prev.y + 6) }));
         break;
-      case ' ':
-        setBullets(prev => [...prev, { x: playerPos.x + 15, y: playerPos.y + 10, id: bulletId }]);
-        setBulletId(prev => prev + 1);
+      case ' ': {
+        const id = bulletIdRef.current++;
+        setBullets(prev => [...prev, {
+          x: playerRef.current.x + 20,
+          y: playerRef.current.y + 10,
+          id
+        }]);
         break;
+      }
     }
-  }, [gameState, playerPos, bulletId]);
+  }, [gameState, gameOver]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
@@ -72,62 +118,108 @@ const DefenderGame: React.FC<DefenderGameProps> = ({ onScoreChange, gameState })
 
   // Game loop
   useEffect(() => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || gameOver) return;
 
     const gameLoop = setInterval(() => {
-      // Move bullets
-      setBullets(prev => 
-        prev.map(bullet => ({ ...bullet, x: bullet.x + 8 }))
-            .filter(bullet => bullet.x < GAME_WIDTH)
+      const player = playerRef.current;
+
+      // Move bullets rightward
+      setBullets(prev =>
+        prev.map(b => ({ ...b, x: b.x + 8 })).filter(b => b.x < GAME_WIDTH)
       );
 
       // Move enemies
-      setEnemies(prev => 
-        prev.map(enemy => ({
-          ...enemy,
-          x: enemy.x - 1,
-          y: enemy.y + Math.sin(Date.now() / 1000 + enemy.id) * 0.5
-        })).filter(enemy => enemy.x > -50)
+      setEnemies(prev =>
+        prev.map(enemy => {
+          const sinY = Math.sin(Date.now() / 1000 + enemy.id) * 0.5;
+          return {
+            ...enemy,
+            x: (enemy.x - (enemy.type === 'mutant' ? 1.5 : 1) + GAME_WIDTH) % GAME_WIDTH,
+            y: Math.max(10, Math.min(GAME_HEIGHT - 60, enemy.y + sinY))
+          };
+        })
       );
 
-      // Check collisions
+      // Bullet-enemy collision
       setBullets(prevBullets => {
-        const remainingBullets = [...prevBullets];
-        
-        setEnemies(prevEnemies => 
+        const toRemove = new Set<number>();
+
+        setEnemies(prevEnemies =>
           prevEnemies.filter(enemy => {
-            const hitBullet = remainingBullets.find(bullet => 
-              Math.abs(bullet.x - enemy.x) < 20 && 
-              Math.abs(bullet.y - enemy.y) < 20
+            const hit = prevBullets.find(
+              b =>
+                !toRemove.has(b.id) &&
+                Math.abs(b.x - enemy.x) < 22 &&
+                Math.abs(b.y - enemy.y) < 18
             );
-            
-            if (hitBullet) {
-              const bulletIndex = remainingBullets.indexOf(hitBullet);
-              remainingBullets.splice(bulletIndex, 1);
-              
-              const newScore = score + 150;
+            if (hit) {
+              toRemove.add(hit.id);
+              const pts = enemy.type === 'mutant' ? 300 : enemy.type === 'bomber' ? 200 : 150;
+              const newScore = scoreRef.current + pts;
+              scoreRef.current = newScore;
               setScore(newScore);
               onScoreChange(newScore);
-              
               return false;
             }
-            
             return true;
           })
         );
-        
-        return remainingBullets;
+
+        return prevBullets.filter(b => !toRemove.has(b.id));
+      });
+
+      // Check if player collides with enemy
+      setEnemies(prevEnemies => {
+        const hit = prevEnemies.some(
+          e => Math.abs(e.x - player.x) < 25 && Math.abs(e.y - player.y) < 25
+        );
+        if (hit) {
+          const newLives = livesRef.current - 1;
+          livesRef.current = newLives;
+          setLives(newLives);
+          if (newLives <= 0) setGameOver(true);
+          else setPlayerPos({ x: 50, y: 150 });
+        }
+        return prevEnemies;
+      });
+
+      // Check if wave is cleared
+      setEnemies(prevEnemies => {
+        if (prevEnemies.length === 0) {
+          const nextWave = waveRef.current + 1;
+          waveRef.current = nextWave;
+          setWave(nextWave);
+          const bonus = nextWave * 500;
+          const newScore = scoreRef.current + bonus;
+          scoreRef.current = newScore;
+          setScore(newScore);
+          onScoreChange(newScore);
+          spawnWave(nextWave);
+        }
+        return prevEnemies;
       });
     }, 50);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, score, onScoreChange]);
+  }, [gameState, gameOver, onScoreChange, spawnWave]);
 
   return (
-    <div className="relative bg-gradient-to-b from-purple-900 to-black" style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}>
+    <div
+      className="relative"
+      style={{ width: GAME_WIDTH, height: GAME_HEIGHT, background: 'linear-gradient(180deg, #0d0221 0%, #1a044f 100%)' }}
+    >
+      {/* Stars */}
+      {Array.from({ length: 40 }, (_, i) => (
+        <div
+          key={i}
+          className="absolute bg-white rounded-full"
+          style={{ left: `${(i * 37 + 5) % 100}%`, top: `${(i * 23 + 7) % 70}%`, width: 1, height: 1 }}
+        />
+      ))}
+
       {/* Player ship */}
-      <div 
-        className="absolute text-xl"
+      <div
+        className="absolute text-xl z-10"
         style={{ left: playerPos.x, top: playerPos.y }}
       >
         🛸
@@ -137,8 +229,8 @@ const DefenderGame: React.FC<DefenderGameProps> = ({ onScoreChange, gameState })
       {bullets.map(bullet => (
         <div
           key={bullet.id}
-          className="absolute w-2 h-1 bg-yellow-400"
-          style={{ left: bullet.x, top: bullet.y }}
+          className="absolute h-1 bg-yellow-400 rounded"
+          style={{ left: bullet.x, top: bullet.y, width: 8 }}
         />
       ))}
 
@@ -149,23 +241,39 @@ const DefenderGame: React.FC<DefenderGameProps> = ({ onScoreChange, gameState })
           className="absolute text-lg"
           style={{ left: enemy.x, top: enemy.y }}
         >
-          👾
+          {enemy.type === 'mutant' ? '👾' : enemy.type === 'bomber' ? '💣' : '🔴'}
         </div>
       ))}
 
       {/* Humanoids */}
-      {humanoids.map((humanoid, index) => (
+      {humanoids.map((h, i) => (
         <div
-          key={index}
+          key={i}
           className="absolute text-sm"
-          style={{ left: humanoid.x, top: humanoid.y }}
+          style={{ left: h.x, top: h.y }}
         >
-          🚶
+          🧑
         </div>
       ))}
 
       {/* Ground */}
-      <div className="absolute bottom-0 left-0 right-0 h-8 bg-green-800"></div>
+      <div className="absolute bottom-0 left-0 right-0 h-8 bg-green-900 border-t border-green-600" />
+
+      {/* UI */}
+      <div className="absolute top-2 left-2 text-white text-xs">
+        SCORE: {score} | LIVES: {'❤️'.repeat(Math.max(0, lives))} | WAVE: {wave}
+      </div>
+      <div className="absolute bottom-2 left-2 text-white text-xs">
+        Arrows: Move | SPACE: Shoot
+      </div>
+
+      {/* Game Over */}
+      {gameOver && (
+        <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center flex-col">
+          <div className="text-red-500 text-2xl font-bold mb-3">GAME OVER</div>
+          <div className="text-white text-lg">Score: {score} | Wave: {wave}</div>
+        </div>
+      )}
     </div>
   );
 };

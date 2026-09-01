@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface SpaceInvadersGameProps {
   onScoreChange: (score: number) => void;
@@ -8,24 +8,46 @@ interface SpaceInvadersGameProps {
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 500;
 
+// Static stars — computed once
+const STARS = Array.from({ length: 50 }, (_, i) => ({
+  left: `${(i * 37 + 11) % 100}%`,
+  top: `${(i * 73 + 17) % 100}%`,
+  delay: `${(i * 0.3) % 3}s`
+}));
+
 const SpaceInvadersGame: React.FC<SpaceInvadersGameProps> = ({ onScoreChange, gameState }) => {
   const [playerPos, setPlayerPos] = useState(GAME_WIDTH / 2);
-  const [bullets, setBullets] = useState<Array<{ x: number; y: number }>>([]);
-  const [invaderBullets, setInvaderBullets] = useState<Array<{ x: number; y: number }>>([]);
-  const [invaders, setInvaders] = useState<Array<{ x: number; y: number; alive: boolean }>>([]);
+  const [bullets, setBullets] = useState<Array<{ x: number; y: number; id: number }>>([]);
+  const [invaderBullets, setInvaderBullets] = useState<Array<{ x: number; y: number; id: number }>>([]);
+  const [invaders, setInvaders] = useState<Array<{ x: number; y: number; alive: boolean; id: number }>>([]);
   const [score, setScore] = useState(0);
-  const [invaderDirection, setInvaderDirection] = useState(1);
   const [gameOver, setGameOver] = useState(false);
+  const [bulletId, setBulletId] = useState(0);
+  const [invaderBulletId, setInvaderBulletId] = useState(1000);
+
+  // Single ref for invader group direction — avoids multi-flip per frame
+  const invaderDirectionRef = useRef<1 | -1>(1);
+  const scoreRef = useRef(score);
+  const playerPosRef = useRef(playerPos);
+  const bulletIdRef = useRef(bulletId);
+  const invaderBulletIdRef = useRef(invaderBulletId);
+
+  scoreRef.current = score;
+  playerPosRef.current = playerPos;
+  bulletIdRef.current = bulletId;
+  invaderBulletIdRef.current = invaderBulletId;
 
   // Initialize invaders
   useEffect(() => {
-    const initialInvaders = [];
+    const initialInvaders: typeof invaders = [];
+    let id = 0;
     for (let row = 0; row < 5; row++) {
       for (let col = 0; col < 10; col++) {
         initialInvaders.push({
-          x: col * 35 + 50,
+          x: col * 35 + 30,
           y: row * 30 + 50,
-          alive: true
+          alive: true,
+          id: id++
         });
       }
     }
@@ -42,181 +64,183 @@ const SpaceInvadersGame: React.FC<SpaceInvadersGameProps> = ({ onScoreChange, ga
       case 'ArrowRight':
         setPlayerPos(prev => Math.min(GAME_WIDTH - 20, prev + 10));
         break;
-      case ' ':
-        setBullets(prev => [...prev, { x: playerPos, y: GAME_HEIGHT - 80 }]);
+      case ' ': {
+        const id = bulletIdRef.current;
+        setBullets(prev => [...prev, { x: playerPosRef.current, y: GAME_HEIGHT - 80, id }]);
+        setBulletId(prev => prev + 1);
         break;
+      }
     }
-  }, [gameState, playerPos, gameOver]);
+  }, [gameState, gameOver]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleKeyPress]);
 
+  // Invader shooting — separate interval from movement loop
+  useEffect(() => {
+    if (gameState !== 'playing' || gameOver) return;
+
+    const shootInterval = setInterval(() => {
+      setInvaders(prevInvaders => {
+        const alive = prevInvaders.filter(inv => inv.alive);
+        if (alive.length === 0) return prevInvaders;
+
+        // Pick a random alive invader to shoot from the bottom rows
+        const shooter = alive[Math.floor(Math.random() * alive.length)];
+        const id = invaderBulletIdRef.current;
+        setInvaderBullets(prev => [...prev, { x: shooter.x + 10, y: shooter.y + 20, id }]);
+        setInvaderBulletId(prev => prev + 1);
+        return prevInvaders;
+      });
+    }, 1500);
+
+    return () => clearInterval(shootInterval);
+  }, [gameState, gameOver]);
+
   // Game loop
   useEffect(() => {
     if (gameState !== 'playing' || gameOver) return;
 
     const gameLoop = setInterval(() => {
-      // Move bullets
+      // Move player bullets upward
       setBullets(prev =>
-        prev.map(bullet => ({ ...bullet, y: bullet.y - 5 }))
-            .filter(bullet => bullet.y > 0)
+        prev.map(b => ({ ...b, y: b.y - 8 })).filter(b => b.y > 0)
       );
 
-      // Move invader bullets
+      // Move invader bullets downward
       setInvaderBullets(prev =>
-        prev.map(bullet => ({ ...bullet, y: bullet.y + 3 }))
-            .filter(bullet => bullet.y < GAME_HEIGHT)
+        prev.map(b => ({ ...b, y: b.y + 4 })).filter(b => b.y < GAME_HEIGHT)
       );
 
-      // Move invaders
-      setInvaders(prev =>
-        prev.map(invader => {
-          let newX = invader.x + invaderDirection * 0.5;
-          let newY = invader.y;
+      // Move invaders as a group — check edge ONCE for all alive invaders
+      setInvaders(prevInvaders => {
+        const alive = prevInvaders.filter(inv => inv.alive);
+        if (alive.length === 0) return prevInvaders;
 
-          // Check if any invader hits the edge
-          if (newX <= 0 || newX >= GAME_WIDTH - 30) {
-            setInvaderDirection(prev => -prev);
-            newY += 20;
-            newX = invader.x;
-          }
+        const dir = invaderDirectionRef.current;
+        const moved = prevInvaders.map(inv =>
+          inv.alive ? { ...inv, x: inv.x + dir * 1.5 } : inv
+        );
 
-          // Check if invaders reached the player
-          if (newY >= GAME_HEIGHT - 100) {
+        // Check if ANY alive invader hits an edge AFTER moving
+        const hitEdge = moved.some(
+          inv => inv.alive && (inv.x <= 10 || inv.x >= GAME_WIDTH - 30)
+        );
+
+        if (hitEdge) {
+          invaderDirectionRef.current = (dir === 1 ? -1 : 1) as 1 | -1;
+          // Move all down by 20 and return without x-move this frame
+          const descended = prevInvaders.map(inv =>
+            inv.alive ? { ...inv, y: inv.y + 20 } : inv
+          );
+          // Check if invaders reached player line
+          if (descended.some(inv => inv.alive && inv.y >= GAME_HEIGHT - 100)) {
             setGameOver(true);
           }
-
-          return {
-            ...invader,
-            x: newX,
-            y: newY
-          };
-        })
-      );
-
-      // Invaders shoot randomly
-      setInvaders(prevInvaders => {
-        const shootingInvader = prevInvaders.find(invader =>
-          invader.alive && Math.random() < 0.005
-        );
-        if (shootingInvader) {
-          setInvaderBullets(prev => [...prev, { x: shootingInvader.x, y: shootingInvader.y }]);
+          return descended;
         }
-        return prevInvaders;
+
+        return moved;
       });
 
-      // Check player bullet collisions with invaders
+      // Player bullet vs invader collision
       setBullets(prevBullets => {
-        const remainingBullets = [...prevBullets];
+        const toRemoveBullets = new Set<number>();
 
         setInvaders(prevInvaders =>
-          prevInvaders.map(invader => {
-            if (!invader.alive) return invader;
+          prevInvaders.map(inv => {
+            if (!inv.alive) return inv;
 
-            const hitBullet = remainingBullets.find(bullet =>
-              Math.abs(bullet.x - invader.x) < 15 &&
-              Math.abs(bullet.y - invader.y) < 15
+            const hit = prevBullets.find(
+              b =>
+                !toRemoveBullets.has(b.id) &&
+                Math.abs(b.x - inv.x - 10) < 18 &&
+                Math.abs(b.y - inv.y) < 18
             );
 
-            if (hitBullet) {
-              const bulletIndex = remainingBullets.indexOf(hitBullet);
-              remainingBullets.splice(bulletIndex, 1);
-
-              const newScore = score + 10;
+            if (hit) {
+              toRemoveBullets.add(hit.id);
+              const newScore = scoreRef.current + 10;
+              scoreRef.current = newScore;
               setScore(newScore);
               onScoreChange(newScore);
-
-              return { ...invader, alive: false };
+              return { ...inv, alive: false };
             }
-
-            return invader;
+            return inv;
           })
         );
 
-        return remainingBullets;
+        return prevBullets.filter(b => !toRemoveBullets.has(b.id));
       });
 
-      // Check invader bullet collisions with player
+      // Invader bullet vs player collision
       setInvaderBullets(prevBullets => {
-        const remainingBullets = prevBullets.filter(bullet => {
-          const hitPlayer = Math.abs(bullet.x - playerPos) < 15 && bullet.y >= GAME_HEIGHT - 80;
-          if (hitPlayer) {
-            setGameOver(true);
-          }
-          return !hitPlayer;
-        });
-        return remainingBullets;
+        const hit = prevBullets.some(
+          b =>
+            Math.abs(b.x - playerPosRef.current) < 20 &&
+            b.y >= GAME_HEIGHT - 90
+        );
+        if (hit) setGameOver(true);
+        return prevBullets;
       });
     }, 100);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, score, invaderDirection, onScoreChange, gameOver, playerPos]);
+  }, [gameState, gameOver, onScoreChange]); // ✅ No score/invaderDirection state in deps
 
   return (
     <div className="space-invaders-game" style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}>
       {/* Player */}
-      <div 
-        className="player"
-        style={{ left: playerPos - 15, bottom: 20 }}
-      >
-        🚀
-      </div>
+      <div className="player" style={{ left: playerPos - 15, bottom: 20 }}>🚀</div>
 
-      {/* Bullets */}
-      {bullets.map((bullet, index) => (
-        <div
-          key={index}
-          className="bullet"
-          style={{ left: bullet.x, top: bullet.y }}
-        />
+      {/* Player bullets */}
+      {bullets.map(bullet => (
+        <div key={bullet.id} className="bullet" style={{ left: bullet.x, top: bullet.y }} />
       ))}
 
-      {/* Invader Bullets */}
-      {invaderBullets.map((bullet, index) => (
+      {/* Invader bullets */}
+      {invaderBullets.map(bullet => (
         <div
-          key={`invader-${index}`}
+          key={bullet.id}
           className="bullet"
-          style={{ left: bullet.x, top: bullet.y, background: '#ff0000' }}
+          style={{ left: bullet.x, top: bullet.y, background: '#ff3333', width: 3, height: 12 }}
         />
       ))}
 
       {/* Invaders */}
-      {invaders.map((invader, index) =>
-        invader.alive && (
-          <div
-            key={index}
-            className="invader"
-            style={{ left: invader.x, top: invader.y }}
-          >
+      {invaders.map(inv =>
+        inv.alive && (
+          <div key={inv.id} className="invader" style={{ left: inv.x, top: inv.y }}>
             👾
           </div>
         )
       )}
 
-      {/* Game Over overlay */}
-      {gameOver && (
-        <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center flex-col">
-          <div className="text-red-500 text-2xl font-bold mb-4">GAME OVER</div>
-          <div className="text-white text-lg mb-4">Final Score: {score}</div>
-        </div>
-      )}
-
-      {/* Stars background */}
+      {/* Static stars background */}
       <div className="stars">
-        {Array.from({ length: 50 }).map((_, i) => (
+        {STARS.map((star, i) => (
           <div
             key={i}
             className="star"
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`,
-              animationDelay: `${Math.random() * 3}s`
-            }}
+            style={{ left: star.left, top: star.top, animationDelay: star.delay }}
           />
         ))}
       </div>
+
+      {/* Score */}
+      <div className="absolute top-2 left-2 text-green-400 text-xs">
+        SCORE: {score}
+      </div>
+
+      {/* Game Over */}
+      {gameOver && (
+        <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center flex-col">
+          <div className="text-red-500 text-2xl font-bold mb-3">GAME OVER</div>
+          <div className="text-white text-lg">Final Score: {score}</div>
+        </div>
+      )}
     </div>
   );
 };

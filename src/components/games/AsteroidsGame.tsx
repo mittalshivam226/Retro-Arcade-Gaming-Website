@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface AsteroidsGameProps {
   onScoreChange: (score: number) => void;
@@ -8,7 +8,7 @@ interface AsteroidsGameProps {
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 400;
 
-interface GameObject {
+interface ShipState {
   x: number;
   y: number;
   vx: number;
@@ -16,33 +16,66 @@ interface GameObject {
   rotation: number;
 }
 
+interface BulletState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  id: number;
+  life: number;
+}
+
+interface AsteroidState {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rotation: number;
+  size: number;
+  id: number;
+}
+
 const AsteroidsGame: React.FC<AsteroidsGameProps> = ({ onScoreChange, gameState }) => {
-  const [ship, setShip] = useState<GameObject>({ x: 200, y: 200, vx: 0, vy: 0, rotation: 0 });
-  const [bullets, setBullets] = useState<Array<GameObject & { id: number; life: number }>>([]);
-  const [asteroids, setAsteroids] = useState<Array<GameObject & { size: number; id: number }>>([]);
+  const [ship, setShip] = useState<ShipState>({ x: 200, y: 200, vx: 0, vy: 0, rotation: 0 });
+  const [bullets, setBullets] = useState<BulletState[]>([]);
+  const [asteroids, setAsteroids] = useState<AsteroidState[]>([]);
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
   const [gameOver, setGameOver] = useState(false);
-  const [thrust, setThrust] = useState(false);
-  const [bulletId, setBulletId] = useState(0);
-  const [asteroidId, setAsteroidId] = useState(0);
+
+  // Use refs so game loop always reads fresh values
+  const shipRef = useRef(ship);
+  const asteroidsRef = useRef(asteroids);
+  const scoreRef = useRef(score);
+  const livesRef = useRef(lives);
+  const thrustRef = useRef(false);
+  const bulletIdRef = useRef(0);
+  const asteroidIdRef = useRef(100);
+  const invincibleRef = useRef(false); // Brief invincibility after hit
+
+  shipRef.current = ship;
+  asteroidsRef.current = asteroids;
+  scoreRef.current = score;
+  livesRef.current = lives;
 
   // Initialize asteroids
   useEffect(() => {
-    const initialAsteroids = [];
+    const initial: AsteroidState[] = [];
     for (let i = 0; i < 5; i++) {
-      initialAsteroids.push({
-        x: Math.random() * GAME_WIDTH,
-        y: Math.random() * GAME_HEIGHT,
+      // Spawn away from center
+      const angle = (i / 5) * Math.PI * 2;
+      initial.push({
+        x: 200 + Math.cos(angle) * 150,
+        y: 200 + Math.sin(angle) * 150,
         vx: (Math.random() - 0.5) * 2,
         vy: (Math.random() - 0.5) * 2,
         rotation: Math.random() * 360,
         size: 3,
-        id: asteroidId + i
+        id: i
       });
     }
-    setAsteroids(initialAsteroids);
-    setAsteroidId(prev => prev + 5);
+    setAsteroids(initial);
+    asteroidIdRef.current = 10;
   }, []);
 
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -50,35 +83,33 @@ const AsteroidsGame: React.FC<AsteroidsGameProps> = ({ onScoreChange, gameState 
 
     switch (event.key) {
       case 'ArrowLeft':
-        setShip(prev => ({ ...prev, rotation: prev.rotation - 5 }));
+        setShip(prev => ({ ...prev, rotation: prev.rotation - 6 }));
         break;
       case 'ArrowRight':
-        setShip(prev => ({ ...prev, rotation: prev.rotation + 5 }));
+        setShip(prev => ({ ...prev, rotation: prev.rotation + 6 }));
         break;
       case 'ArrowUp':
-        setThrust(true);
+        thrustRef.current = true;
         break;
       case ' ': {
-        const angle = (ship.rotation - 90) * Math.PI / 180;
+        event.preventDefault();
+        const s = shipRef.current;
+        const angle = (s.rotation - 90) * (Math.PI / 180);
+        const id = bulletIdRef.current++;
         setBullets(prev => [...prev, {
-          x: ship.x,
-          y: ship.y,
+          x: s.x, y: s.y,
           vx: Math.cos(angle) * 8,
           vy: Math.sin(angle) * 8,
-          rotation: 0,
-          id: bulletId,
-          life: 60
+          id,
+          life: 55
         }]);
-        setBulletId(prev => prev + 1);
         break;
       }
     }
-  }, [gameState, ship, bulletId, gameOver]);
+  }, [gameState, gameOver]);
 
   const handleKeyUp = useCallback((event: KeyboardEvent) => {
-    if (event.key === 'ArrowUp') {
-      setThrust(false);
-    }
+    if (event.key === 'ArrowUp') thrustRef.current = false;
   }, []);
 
   useEffect(() => {
@@ -90,145 +121,157 @@ const AsteroidsGame: React.FC<AsteroidsGameProps> = ({ onScoreChange, gameState 
     };
   }, [handleKeyDown, handleKeyUp]);
 
-  // Game loop
+  // Game loop — minimal deps, everything via refs
   useEffect(() => {
-    if (gameState !== 'playing') return;
+    if (gameState !== 'playing' || gameOver) return;
 
     const gameLoop = setInterval(() => {
       // Update ship
       setShip(prev => {
-        let newVx = prev.vx;
-        let newVy = prev.vy;
-        
-        if (thrust) {
-          const angle = (prev.rotation - 90) * Math.PI / 180;
-          newVx += Math.cos(angle) * 0.3;
-          newVy += Math.sin(angle) * 0.3;
+        let vx = prev.vx;
+        let vy = prev.vy;
+
+        if (thrustRef.current) {
+          const angle = (prev.rotation - 90) * (Math.PI / 180);
+          vx += Math.cos(angle) * 0.25;
+          vy += Math.sin(angle) * 0.25;
+          // Cap speed
+          const speed = Math.sqrt(vx * vx + vy * vy);
+          if (speed > 6) { vx = (vx / speed) * 6; vy = (vy / speed) * 6; }
         }
-        
-        // Apply friction
-        newVx *= 0.99;
-        newVy *= 0.99;
-        
-        // Update position with wrapping
-        const newX = (prev.x + newVx + GAME_WIDTH) % GAME_WIDTH;
-        const newY = (prev.y + newVy + GAME_HEIGHT) % GAME_HEIGHT;
-        
-        return { ...prev, x: newX, y: newY, vx: newVx, vy: newVy };
+
+        // Friction
+        vx *= 0.99;
+        vy *= 0.99;
+
+        return {
+          ...prev,
+          x: (prev.x + vx + GAME_WIDTH) % GAME_WIDTH,
+          y: (prev.y + vy + GAME_HEIGHT) % GAME_HEIGHT,
+          vx, vy
+        };
       });
 
       // Update bullets
-      setBullets(prev => 
-        prev.map(bullet => ({
-          ...bullet,
-          x: (bullet.x + bullet.vx + GAME_WIDTH) % GAME_WIDTH,
-          y: (bullet.y + bullet.vy + GAME_HEIGHT) % GAME_HEIGHT,
-          life: bullet.life - 1
-        })).filter(bullet => bullet.life > 0)
+      setBullets(prev =>
+        prev
+          .map(b => ({
+            ...b,
+            x: (b.x + b.vx + GAME_WIDTH) % GAME_WIDTH,
+            y: (b.y + b.vy + GAME_HEIGHT) % GAME_HEIGHT,
+            life: b.life - 1
+          }))
+          .filter(b => b.life > 0)
       );
 
       // Update asteroids
-      setAsteroids(prev => 
-        prev.map(asteroid => ({
-          ...asteroid,
-          x: (asteroid.x + asteroid.vx + GAME_WIDTH) % GAME_WIDTH,
-          y: (asteroid.y + asteroid.vy + GAME_HEIGHT) % GAME_HEIGHT,
-          rotation: asteroid.rotation + 2
+      setAsteroids(prev =>
+        prev.map(a => ({
+          ...a,
+          x: (a.x + a.vx + GAME_WIDTH) % GAME_WIDTH,
+          y: (a.y + a.vy + GAME_HEIGHT) % GAME_HEIGHT,
+          rotation: a.rotation + 1
         }))
       );
 
-      // Check collisions
+      // Bullet-asteroid collision
       setBullets(prevBullets => {
-        const remainingBullets = [...prevBullets];
+        const toRemoveBullets = new Set<number>();
+        const toSplitAsteroids: AsteroidState[] = [];
+        const toRemoveAsteroidIds = new Set<number>();
 
         setAsteroids(prevAsteroids => {
-          const newAsteroids = [...prevAsteroids];
+          for (const asteroid of prevAsteroids) {
+            for (const bullet of prevBullets) {
+              if (toRemoveBullets.has(bullet.id) || toRemoveAsteroidIds.has(asteroid.id)) continue;
 
-          prevAsteroids.forEach((asteroid, asteroidIndex) => {
-            const hitBullet = remainingBullets.find(bullet => {
               const dx = bullet.x - asteroid.x;
               const dy = bullet.y - asteroid.y;
-              const distance = Math.sqrt(dx * dx + dy * dy);
-              return distance < asteroid.size * 10;
-            });
+              if (Math.sqrt(dx * dx + dy * dy) < asteroid.size * 10) {
+                toRemoveBullets.add(bullet.id);
+                toRemoveAsteroidIds.add(asteroid.id);
 
-            if (hitBullet) {
-              const bulletIndex = remainingBullets.indexOf(hitBullet);
-              remainingBullets.splice(bulletIndex, 1);
+                // Score based on size
+                const points = (4 - asteroid.size) * 20;
+                const newScore = scoreRef.current + points;
+                scoreRef.current = newScore;
+                setScore(newScore);
+                onScoreChange(newScore);
 
-              // Remove asteroid
-              newAsteroids.splice(asteroidIndex, 1);
-
-              // Create smaller asteroids if large enough
-              if (asteroid.size > 1) {
-                for (let i = 0; i < 2; i++) {
-                  newAsteroids.push({
-                    x: asteroid.x,
-                    y: asteroid.y,
-                    vx: (Math.random() - 0.5) * 3,
-                    vy: (Math.random() - 0.5) * 3,
-                    rotation: Math.random() * 360,
-                    size: asteroid.size - 1,
-                    id: asteroidId + i
-                  });
+                // Split if large enough
+                if (asteroid.size > 1) {
+                  const id1 = asteroidIdRef.current++;
+                  const id2 = asteroidIdRef.current++;
+                  toSplitAsteroids.push(
+                    { ...asteroid, vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3, size: asteroid.size - 1, id: id1 },
+                    { ...asteroid, vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3, size: asteroid.size - 1, id: id2 }
+                  );
                 }
-                setAsteroidId(prev => prev + 2);
               }
-
-              const points = (4 - asteroid.size) * 20;
-              const newScore = score + points;
-              setScore(newScore);
-              onScoreChange(newScore);
             }
-          });
+          }
 
-          return newAsteroids;
+          const remaining = prevAsteroids.filter(a => !toRemoveAsteroidIds.has(a.id));
+          return [...remaining, ...toSplitAsteroids];
         });
 
-        return remainingBullets;
+        return prevBullets.filter(b => !toRemoveBullets.has(b.id));
       });
 
-      // Check ship collision with asteroids
-      const shipHit = asteroids.some(asteroid => {
-        const dx = ship.x - asteroid.x;
-        const dy = ship.y - asteroid.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        return distance < asteroid.size * 10;
-      });
+      // Ship-asteroid collision
+      if (!invincibleRef.current) {
+        const s = shipRef.current;
+        const hit = asteroidsRef.current.some(a => {
+          const dx = s.x - a.x;
+          const dy = s.y - a.y;
+          return Math.sqrt(dx * dx + dy * dy) < a.size * 10;
+        });
 
-      if (shipHit) {
-        setLives(prev => {
-          const newLives = prev - 1;
+        if (hit) {
+          const newLives = livesRef.current - 1;
+          livesRef.current = newLives;
+          setLives(newLives);
           if (newLives <= 0) {
             setGameOver(true);
           } else {
-            // Reset ship position
             setShip({ x: 200, y: 200, vx: 0, vy: 0, rotation: 0 });
+            invincibleRef.current = true;
+            setTimeout(() => { invincibleRef.current = false; }, 2000);
           }
-          return newLives;
-        });
+        }
       }
     }, 16);
 
     return () => clearInterval(gameLoop);
-  }, [gameState, thrust, score, asteroidId, onScoreChange]);
+  }, [gameState, gameOver, onScoreChange]); // ✅ No ship/asteroids/score in deps
 
-  const getAsteroidSize = (size: number) => {
-    return size * 15;
-  };
+  const getAsteroidChar = (size: number) =>
+    size === 3 ? '🪨' : size === 2 ? '⬟' : '∙';
 
   return (
     <div className="relative bg-black" style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}>
+      {/* Stars */}
+      <div className="absolute inset-0">
+        {Array.from({ length: 40 }).map((_, i) => (
+          <div
+            key={i}
+            className="absolute w-1 h-1 bg-white opacity-50"
+            style={{ left: `${(i * 37 + 7) % 100}%`, top: `${(i * 73 + 13) % 100}%` }}
+          />
+        ))}
+      </div>
+
       {/* Ship */}
-      <div 
+      <div
         className="absolute text-xl"
-        style={{ 
-          left: ship.x - 10, 
+        style={{
+          left: ship.x - 10,
           top: ship.y - 10,
-          transform: `rotate(${ship.rotation}deg)`
+          transform: `rotate(${ship.rotation}deg)`,
+          opacity: invincibleRef.current ? 0.5 : 1
         }}
       >
-        {thrust ? '🚀' : '🔺'}
+        {thrustRef.current ? '🚀' : '🔺'}
       </div>
 
       {/* Bullets */}
@@ -236,7 +279,7 @@ const AsteroidsGame: React.FC<AsteroidsGameProps> = ({ onScoreChange, gameState 
         <div
           key={bullet.id}
           className="absolute w-2 h-2 bg-white rounded-full"
-          style={{ left: bullet.x, top: bullet.y }}
+          style={{ left: bullet.x - 1, top: bullet.y - 1 }}
         />
       ))}
 
@@ -244,47 +287,31 @@ const AsteroidsGame: React.FC<AsteroidsGameProps> = ({ onScoreChange, gameState 
       {asteroids.map(asteroid => (
         <div
           key={asteroid.id}
-          className="absolute text-gray-400"
-          style={{ 
-            left: asteroid.x - getAsteroidSize(asteroid.size) / 2, 
-            top: asteroid.y - getAsteroidSize(asteroid.size) / 2,
-            fontSize: `${getAsteroidSize(asteroid.size)}px`,
+          className="absolute text-gray-300"
+          style={{
+            left: asteroid.x - asteroid.size * 8,
+            top: asteroid.y - asteroid.size * 8,
+            fontSize: `${asteroid.size * 16}px`,
             transform: `rotate(${asteroid.rotation}deg)`
           }}
         >
-          ☄️
+          {getAsteroidChar(asteroid.size)}
         </div>
       ))}
 
-      {/* Stars background */}
-      <div className="absolute inset-0">
-        {Array.from({ length: 50 }).map((_, i) => (
-          <div
-            key={i}
-            className="absolute w-1 h-1 bg-white opacity-60"
-            style={{
-              left: `${(i * 37) % 100}%`,
-              top: `${(i * 73) % 100}%`
-            }}
-          />
-        ))}
+      {/* UI */}
+      <div className="absolute top-2 left-2 text-white text-xs">
+        LIVES: {'❤️'.repeat(Math.max(0, lives))} | SCORE: {score}
       </div>
-
-      {/* Controls hint */}
       <div className="absolute bottom-2 left-2 text-white text-xs">
         ←→: Rotate | ↑: Thrust | SPACE: Shoot
       </div>
 
-      {/* UI */}
-      <div className="absolute top-2 left-2 text-white text-sm">
-        Lives: {lives} | Score: {score}
-      </div>
-
-      {/* Game Over overlay */}
+      {/* Game Over */}
       {gameOver && (
-        <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center flex-col">
-          <div className="text-red-500 text-2xl font-bold mb-4">GAME OVER</div>
-          <div className="text-white text-lg mb-4">Final Score: {score}</div>
+        <div className="absolute inset-0 bg-black bg-opacity-80 flex items-center justify-center flex-col">
+          <div className="text-red-500 text-2xl font-bold mb-3">GAME OVER</div>
+          <div className="text-white text-lg">Final Score: {score}</div>
         </div>
       )}
     </div>

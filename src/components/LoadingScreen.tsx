@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
 
+const LOADING_TEXTS = [
+  'INITIALIZING ARCADE SYSTEM',
+  'LOADING GAME DATA',
+  'CALIBRATING CONTROLS',
+  'WARMING UP PROCESSORS',
+  'READY TO PLAY!'
+];
+
 const LoadingScreen: React.FC<{ onLoadingComplete: () => void }> = ({ onLoadingComplete }) => {
   const [progress, setProgress] = useState(0);
   const [currentText, setCurrentText] = useState('INITIALIZING ARCADE SYSTEM');
-
-  const loadingTexts = [
-    'INITIALIZING ARCADE SYSTEM',
-    'LOADING GAME DATA',
-    'CALIBRATING CONTROLS',
-    'WARMING UP PROCESSORS',
-    'READY TO PLAY!'
-  ];
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -22,15 +22,15 @@ const LoadingScreen: React.FC<{ onLoadingComplete: () => void }> = ({ onLoadingC
         }
 
         // Update text based on progress
-        const textIndex = Math.floor((newProgress / 100) * loadingTexts.length);
-        setCurrentText(loadingTexts[Math.min(textIndex, loadingTexts.length - 1)]);
+        const textIndex = Math.floor((newProgress / 100) * LOADING_TEXTS.length);
+        setCurrentText(LOADING_TEXTS[Math.min(textIndex, LOADING_TEXTS.length - 1)]);
 
         return newProgress;
       });
     }, 200);
 
     return () => clearInterval(interval);
-  }, [onLoadingComplete, loadingTexts]);
+  }, [onLoadingComplete]);
 
   return (
     <div className="min-h-screen bg-black flex items-center justify-center p-4">

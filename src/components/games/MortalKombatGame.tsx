@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface MortalKombatGameProps {
   onScoreChange: (score: number) => void;
@@ -7,262 +7,311 @@ interface MortalKombatGameProps {
 
 const GAME_WIDTH = 400;
 const GAME_HEIGHT = 300;
+const GROUND_Y = 210;
+
+interface Fighter {
+  x: number;
+  y: number;
+  health: number;
+  action: 'idle' | 'walk' | 'punch' | 'kick' | 'special' | 'hurt';
+  facing: 'left' | 'right';
+}
 
 const MortalKombatGame: React.FC<MortalKombatGameProps> = ({ onScoreChange, gameState }) => {
-  const [player1, setPlayer1] = useState({ 
-    x: 100, 
-    y: 200, 
-    health: 100, 
-    action: 'idle',
-    facing: 'right'
+  const [player1, setPlayer1] = useState<Fighter>({
+    x: 80, y: GROUND_Y, health: 100, action: 'idle', facing: 'right'
   });
-  const [player2, setPlayer2] = useState({ 
-    x: 300, 
-    y: 200, 
-    health: 100, 
-    action: 'idle',
-    facing: 'left'
+  const [player2, setPlayer2] = useState<Fighter>({
+    x: 270, y: GROUND_Y, health: 100, action: 'idle', facing: 'left'
   });
   const [score, setScore] = useState(0);
   const [winner, setWinner] = useState<string | null>(null);
+  const [combo, setCombo] = useState(0);
+  const [comboTimer, setComboTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+
+  const player1Ref = useRef(player1);
+  const player2Ref = useRef(player2);
+  const scoreRef = useRef(score);
+  const winnerRef = useRef(winner);
+  const comboRef = useRef(combo);
+
+  player1Ref.current = player1;
+  player2Ref.current = player2;
+  scoreRef.current = score;
+  winnerRef.current = winner;
+  comboRef.current = combo;
+
+  const checkWinner = useCallback(() => {
+    const p1h = player1Ref.current.health;
+    const p2h = player2Ref.current.health;
+    if (p2h <= 0 && !winnerRef.current) {
+      const bonus = 1000 + comboRef.current * 100;
+      const newScore = scoreRef.current + bonus;
+      scoreRef.current = newScore;
+      setScore(newScore);
+      onScoreChange(newScore);
+      setWinner('SCORPION WINS!');
+    } else if (p1h <= 0 && !winnerRef.current) {
+      setWinner('SUB-ZERO WINS!');
+    }
+  }, [onScoreChange]);
+
+  const addCombo = useCallback(() => {
+    setCombo(prev => {
+      const next = prev + 1;
+      comboRef.current = next;
+      return next;
+    });
+    if (comboTimer) clearTimeout(comboTimer);
+    const t = setTimeout(() => { setCombo(0); comboRef.current = 0; }, 1500);
+    setComboTimer(t);
+  }, [comboTimer]);
 
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
-    if (gameState !== 'playing' || winner) return;
-    
+    if (gameState !== 'playing' || winnerRef.current) return;
+
+    const p1 = player1Ref.current;
+    const p2 = player2Ref.current;
+    const distance = Math.abs(p1.x - p2.x);
+
     switch (event.key) {
       case 'ArrowLeft':
-        setPlayer1(prev => ({ 
-          ...prev, 
-          x: Math.max(0, prev.x - 4), 
-          action: 'walk',
-          facing: 'left'
+        setPlayer1(prev => ({
+          ...prev, x: Math.max(20, prev.x - 5), action: 'walk', facing: 'left'
         }));
+        setTimeout(() => setPlayer1(prev => prev.action === 'walk' ? { ...prev, action: 'idle' } : prev), 120);
         break;
+
       case 'ArrowRight':
-        setPlayer1(prev => ({ 
-          ...prev, 
-          x: Math.min(GAME_WIDTH - 50, prev.x + 4), 
-          action: 'walk',
-          facing: 'right'
+        setPlayer1(prev => ({
+          ...prev, x: Math.min(GAME_WIDTH - 60, prev.x + 5), action: 'walk', facing: 'right'
         }));
+        setTimeout(() => setPlayer1(prev => prev.action === 'walk' ? { ...prev, action: 'idle' } : prev), 120);
         break;
+
       case ' ':
         setPlayer1(prev => ({ ...prev, action: 'punch' }));
-        // Check if punch hits player 2
-        if (Math.abs(player1.x - player2.x) < 60) {
-          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - 12) }));
-          const newScore = score + 10;
+        if (distance < 65) {
+          addCombo();
+          const mult = 1 + Math.min(comboRef.current, 5) * 0.1;
+          const dmg = Math.round(12 * mult);
+          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - dmg), action: 'hurt' }));
+          const pts = 10 + comboRef.current * 5;
+          const newScore = scoreRef.current + pts;
+          scoreRef.current = newScore;
           setScore(newScore);
           onScoreChange(newScore);
+          setTimeout(() => { setPlayer2(prev => prev.action === 'hurt' ? { ...prev, action: 'idle' } : prev); checkWinner(); }, 250);
         }
-        setTimeout(() => setPlayer1(prev => ({ ...prev, action: 'idle' })), 300);
+        setTimeout(() => setPlayer1(prev => prev.action === 'punch' ? { ...prev, action: 'idle' } : prev), 300);
         break;
+
       case 'ArrowUp':
         setPlayer1(prev => ({ ...prev, action: 'kick' }));
-        if (Math.abs(player1.x - player2.x) < 70) {
-          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - 18) }));
-          const newScore = score + 15;
+        if (distance < 80) {
+          addCombo();
+          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - 18), action: 'hurt' }));
+          const pts = 15 + comboRef.current * 5;
+          const newScore = scoreRef.current + pts;
+          scoreRef.current = newScore;
           setScore(newScore);
           onScoreChange(newScore);
+          setTimeout(() => { setPlayer2(prev => prev.action === 'hurt' ? { ...prev, action: 'idle' } : prev); checkWinner(); }, 300);
         }
-        setTimeout(() => setPlayer1(prev => ({ ...prev, action: 'idle' })), 400);
+        setTimeout(() => setPlayer1(prev => prev.action === 'kick' ? { ...prev, action: 'idle' } : prev), 400);
         break;
+
       case 'ArrowDown':
-        // Special move
         setPlayer1(prev => ({ ...prev, action: 'special' }));
-        if (Math.abs(player1.x - player2.x) < 80) {
-          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - 25) }));
-          const newScore = score + 25;
+        if (distance < 90) {
+          addCombo();
+          setPlayer2(prev => ({ ...prev, health: Math.max(0, prev.health - 28), action: 'hurt' }));
+          const pts = 25 + comboRef.current * 10;
+          const newScore = scoreRef.current + pts;
+          scoreRef.current = newScore;
           setScore(newScore);
           onScoreChange(newScore);
+          setTimeout(() => { setPlayer2(prev => prev.action === 'hurt' ? { ...prev, action: 'idle' } : prev); checkWinner(); }, 400);
         }
-        setTimeout(() => setPlayer1(prev => ({ ...prev, action: 'idle' })), 600);
+        setTimeout(() => setPlayer1(prev => prev.action === 'special' ? { ...prev, action: 'idle' } : prev), 600);
         break;
     }
-  }, [gameState, player1.x, player2.x, score, winner, onScoreChange]);
+  }, [gameState, addCombo, checkWinner, onScoreChange]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleKeyPress]);
 
-  // AI for player 2
+  // AI for Player 2
   useEffect(() => {
     if (gameState !== 'playing' || winner) return;
 
     const aiLoop = setInterval(() => {
-      const distance = Math.abs(player1.x - player2.x);
-      
+      if (winnerRef.current) return;
+      const p1 = player1Ref.current;
+      const p2 = player2Ref.current;
+      const distance = Math.abs(p1.x - p2.x);
+
       if (distance > 100) {
-        // Move towards player 1
         setPlayer2(prev => ({
           ...prev,
-          x: prev.x < player1.x ? prev.x + 2 : prev.x - 2,
+          x: prev.x < p1.x ? prev.x + 2.5 : prev.x - 2.5,
           action: 'walk',
-          facing: prev.x < player1.x ? 'right' : 'left'
+          facing: prev.x < p1.x ? 'right' : 'left'
         }));
-      } else if (distance < 70 && Math.random() > 0.6) {
-        // Attack
-        const attackType = Math.random();
-        if (attackType > 0.7) {
-          setPlayer2(prev => ({ ...prev, action: 'special' }));
-          if (distance < 80) {
-            setPlayer1(prev => ({ ...prev, health: Math.max(0, prev.health - 20) }));
-          }
-          setTimeout(() => setPlayer2(prev => ({ ...prev, action: 'idle' })), 600);
-        } else if (attackType > 0.4) {
-          setPlayer2(prev => ({ ...prev, action: 'kick' }));
-          if (distance < 70) {
-            setPlayer1(prev => ({ ...prev, health: Math.max(0, prev.health - 15) }));
-          }
-          setTimeout(() => setPlayer2(prev => ({ ...prev, action: 'idle' })), 400);
-        } else {
-          setPlayer2(prev => ({ ...prev, action: 'punch' }));
-          if (distance < 60) {
-            setPlayer1(prev => ({ ...prev, health: Math.max(0, prev.health - 10) }));
-          }
-          setTimeout(() => setPlayer2(prev => ({ ...prev, action: 'idle' })), 300);
+        setTimeout(() => setPlayer2(prev => prev.action === 'walk' ? { ...prev, action: 'idle' } : prev), 120);
+      } else if (distance < 80 && Math.random() > 0.5) {
+        const r = Math.random();
+        let dmg = 0;
+        let action: Fighter['action'] = 'punch';
+
+        if (r > 0.75) { action = 'special'; dmg = 22; }
+        else if (r > 0.45) { action = 'kick'; dmg = 15; }
+        else { action = 'punch'; dmg = 10; }
+
+        setPlayer2(prev => ({ ...prev, action }));
+
+        if (distance < (action === 'special' ? 90 : action === 'kick' ? 80 : 65)) {
+          setPlayer1(prev => ({ ...prev, health: Math.max(0, prev.health - dmg), action: 'hurt' }));
+          setTimeout(() => { setPlayer1(prev => prev.action === 'hurt' ? { ...prev, action: 'idle' } : prev); checkWinner(); }, 250);
         }
-      } else {
-        setPlayer2(prev => ({ ...prev, action: 'idle' }));
+
+        const delay = action === 'special' ? 600 : action === 'kick' ? 400 : 300;
+        setTimeout(() => setPlayer2(prev => prev.action === action ? { ...prev, action: 'idle' } : prev), delay);
       }
-    }, 400);
+    }, 450);
 
     return () => clearInterval(aiLoop);
-  }, [gameState, player1.x, player2.x, winner]);
+  }, [gameState, winner, checkWinner]);
 
-  // Check for winner
-  useEffect(() => {
-    if (player1.health <= 0) {
-      setWinner('Player 2 Wins!');
-    } else if (player2.health <= 0) {
-      setWinner('Player 1 Wins!');
-      const newScore = score + 1000;
-      setScore(newScore);
-      onScoreChange(newScore);
-    }
-  }, [player1.health, player2.health, score, onScoreChange]);
-
-  const getPlayerSprite = (player: { action: string }) => {
-    switch (player.action) {
+  const getSprite = (fighter: Fighter) => {
+    switch (fighter.action) {
       case 'punch': return '👊';
       case 'kick': return '🦵';
       case 'special': return '⚡';
+      case 'hurt': return '😵';
       case 'walk': return '🚶';
-      default: return '🥋';
+      default: return '🥷';
     }
   };
 
-  const getActionEffect = (player: { action: string }) => {
-    if (player.action === 'special') return '💥';
-    if (player.action === 'punch') return '👊';
-    if (player.action === 'kick') return '💨';
-    return '';
+  const getActionEffect = (fighter: Fighter) => {
+    if (fighter.action === 'special') return '💥';
+    if (fighter.action === 'punch') return '👊';
+    if (fighter.action === 'kick') return '💨';
+    return null;
   };
 
   return (
-    <div className="relative bg-gradient-to-b from-red-900 to-black" style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}>
-      {/* Background */}
-      <div className="absolute inset-0 bg-gradient-to-r from-purple-900 to-red-900 opacity-50"></div>
-      
+    <div
+      className="relative overflow-hidden"
+      style={{
+        width: GAME_WIDTH,
+        height: GAME_HEIGHT,
+        background: 'linear-gradient(180deg, #1a0000 0%, #3d0000 40%, #1a0000 100%)'
+      }}
+    >
+      {/* Background pillars */}
+      {[60, 160, 260, 340].map(x => (
+        <div key={x} className="absolute bottom-12 w-6 bg-gray-800 opacity-40" style={{ left: x, height: 100 }} />
+      ))}
+
       {/* Health bars */}
-      <div className="absolute top-4 left-4 right-4 flex justify-between z-10">
-        <div className="bg-gray-800 p-2 rounded border-2 border-yellow-400">
-          <div className="text-xs text-yellow-400 mb-1 font-bold">SCORPION</div>
-          <div className="w-32 h-6 bg-red-800 rounded border">
-            <div 
-              className="h-full bg-green-500 rounded transition-all duration-300"
-              style={{ width: `${player1.health}%` }}
-            ></div>
+      <div className="absolute top-3 left-3 right-3 flex justify-between z-10 items-center">
+        <div className="bg-black bg-opacity-80 p-1.5 rounded border-2 border-yellow-500">
+          <div className="text-xs text-yellow-400 font-bold mb-1">SCORPION</div>
+          <div className="w-28 h-5 bg-gray-900 rounded overflow-hidden">
+            <div
+              className="h-full rounded transition-all duration-150"
+              style={{
+                width: `${player1.health}%`,
+                background: player1.health > 50 ? '#22c55e' : player1.health > 25 ? '#eab308' : '#dc2626'
+              }}
+            />
           </div>
         </div>
-        <div className="bg-gray-800 p-2 rounded border-2 border-yellow-400">
-          <div className="text-xs text-yellow-400 mb-1 font-bold">SUB-ZERO</div>
-          <div className="w-32 h-6 bg-red-800 rounded border">
-            <div 
-              className="h-full bg-green-500 rounded transition-all duration-300"
-              style={{ width: `${player2.health}%` }}
-            ></div>
+        <div className="text-center">
+          <div className="text-yellow-500 text-sm font-bold">ROUND 1</div>
+          {combo > 1 && (
+            <div className="text-orange-400 text-xs font-bold animate-pulse">{combo}x COMBO!</div>
+          )}
+        </div>
+        <div className="bg-black bg-opacity-80 p-1.5 rounded border-2 border-blue-400">
+          <div className="text-xs text-blue-300 font-bold mb-1 text-right">SUB-ZERO</div>
+          <div className="w-28 h-5 bg-gray-900 rounded overflow-hidden">
+            <div
+              className="h-full rounded transition-all duration-150 ml-auto"
+              style={{
+                width: `${player2.health}%`,
+                background: player2.health > 50 ? '#22c55e' : player2.health > 25 ? '#eab308' : '#dc2626'
+              }}
+            />
           </div>
         </div>
       </div>
-
-      {/* Round indicator */}
-      <div className="absolute top-16 left-1/2 transform -translate-x-1/2 text-yellow-400 text-xl font-bold z-10">
-        ROUND 1
-      </div>
-
-      {/* Winner announcement */}
-      {winner && (
-        <div className="absolute inset-0 bg-black bg-opacity-75 flex items-center justify-center z-20">
-          <div className="text-center">
-            <div className="text-4xl text-yellow-400 font-bold mb-4 animate-pulse">
-              {winner}
-            </div>
-            <div className="text-xl text-red-500 font-bold animate-bounce">
-              FATALITY!
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Player 1 */}
-      <div 
-        className="absolute text-4xl transition-all duration-100 z-10"
-        style={{ 
-          left: player1.x, 
-          top: player1.y,
-          transform: player1.facing === 'left' ? 'scaleX(-1)' : 'scaleX(1)'
+      <div
+        className="absolute text-4xl transition-all duration-75 z-10"
+        style={{
+          left: player1.x, top: player1.y,
+          transform: player1.facing === 'left' ? 'scaleX(-1)' : undefined
         }}
       >
-        {getPlayerSprite(player1)}
+        {getSprite(player1)}
       </div>
 
-      {/* Player 1 action effects */}
-      {player1.action !== 'idle' && player1.action !== 'walk' && (
-        <div 
+      {/* Player 1 effect */}
+      {getActionEffect(player1) && (
+        <div
           className="absolute text-2xl animate-ping z-10"
-          style={{ 
-            left: player1.x + (player1.facing === 'right' ? 40 : -20), 
-            top: player1.y + 10
-          }}
+          style={{ left: player1.x + (player1.facing === 'right' ? 45 : -25), top: player1.y + 10 }}
         >
           {getActionEffect(player1)}
         </div>
       )}
 
       {/* Player 2 */}
-      <div 
-        className="absolute text-4xl transition-all duration-100 z-10"
-        style={{ 
-          left: player2.x, 
-          top: player2.y,
-          transform: player2.facing === 'left' ? 'scaleX(-1)' : 'scaleX(1)'
+      <div
+        className="absolute text-4xl transition-all duration-75 z-10"
+        style={{
+          left: player2.x, top: player2.y,
+          transform: player2.facing === 'left' ? 'scaleX(-1)' : undefined
         }}
       >
-        {getPlayerSprite(player2)}
+        {getSprite(player2)}
       </div>
 
-      {/* Player 2 action effects */}
-      {player2.action !== 'idle' && player2.action !== 'walk' && (
-        <div 
+      {/* Player 2 effect */}
+      {getActionEffect(player2) && (
+        <div
           className="absolute text-2xl animate-ping z-10"
-          style={{ 
-            left: player2.x + (player2.facing === 'right' ? 40 : -20), 
-            top: player2.y + 10
-          }}
+          style={{ left: player2.x + (player2.facing === 'right' ? 45 : -25), top: player2.y + 10 }}
         >
           {getActionEffect(player2)}
         </div>
       )}
 
       {/* Ground */}
-      <div className="absolute bottom-0 left-0 right-0 h-12 bg-gray-700 border-t-4 border-yellow-600"></div>
+      <div className="absolute bottom-0 left-0 right-0 h-12 bg-gray-800 border-t-4 border-yellow-700" />
 
-      {/* Controls hint */}
-      <div className="absolute bottom-2 left-2 text-xs text-yellow-400 z-10">
+      {/* Controls */}
+      <div className="absolute bottom-2 left-2 text-xs text-yellow-600 z-10">
         ←→: Move | SPACE: Punch | ↑: Kick | ↓: Special
       </div>
+      <div className="absolute bottom-2 right-2 text-xs text-yellow-400 z-10">
+        SCORE: {score}
+      </div>
+
+      {/* Winner */}
+      {winner && (
+        <div className="absolute inset-0 bg-black bg-opacity-85 flex items-center justify-center z-20 flex-col">
+          <div className="text-5xl text-yellow-400 font-bold mb-4 animate-pulse">{winner}</div>
+          <div className="text-3xl text-red-600 font-bold animate-bounce">FATALITY!</div>
+          <div className="text-white mt-4 text-lg">Score: {score}</div>
+        </div>
+      )}
     </div>
   );
 };
